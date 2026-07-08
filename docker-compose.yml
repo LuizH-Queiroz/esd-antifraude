@@ -1,0 +1,203 @@
+name: antifraud-poc
+
+services:
+  api-gateway:
+    build: ./api-gateway
+    container_name: api-gateway
+    command: tail -f /dev/null
+    ports:
+      - "8080:8000"
+    volumes:
+      - ./api-gateway:/app
+    environment:
+      INGESTION_SERVICE_URL: http://ingestion-service:8000
+      ADMIN_PANEL_SERVICE_URL: http://admin-panel-service:8000
+    networks:
+      - antifraud-net
+
+  ingestion-service:
+    build: ./ingestion-service
+    container_name: ingestion-service
+    command: tail -f /dev/null
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./ingestion-service:/app
+    environment:
+      DATABASE_URL: postgresql://ingestion:ingestion@ingestion-db:5432/ingestion_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: antifraud
+      RABBITMQ_PASSWORD: antifraud
+    depends_on:
+      ingestion-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - antifraud-net
+
+  risk-scoring-service:
+    build: ./risk-scoring-service
+    container_name: risk-scoring-service
+    command: tail -f /dev/null
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./risk-scoring-service:/app
+    environment:
+      DATABASE_URL: postgresql://risk_scoring:risk_scoring@risk-scoring-db:5432/risk_scoring_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: antifraud
+      RABBITMQ_PASSWORD: antifraud
+    depends_on:
+      risk-scoring-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - antifraud-net
+
+  quarantine-service:
+    build: ./quarantine-service
+    container_name: quarantine-service
+    command: tail -f /dev/null
+    ports:
+      - "8003:8000"
+    volumes:
+      - ./quarantine-service:/app
+    environment:
+      DATABASE_URL: postgresql://quarantine:quarantine@quarantine-db:5432/quarantine_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: antifraud
+      RABBITMQ_PASSWORD: antifraud
+    depends_on:
+      quarantine-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - antifraud-net
+
+  admin-panel-service:
+    build: ./admin-panel-service
+    container_name: admin-panel-service
+    command: tail -f /dev/null
+    ports:
+      - "8004:8000"
+    volumes:
+      - ./admin-panel-service:/app
+    environment:
+      DATABASE_URL: postgresql://admin_panel:admin_panel@admin-panel-db:5432/admin_panel_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: antifraud
+      RABBITMQ_PASSWORD: antifraud
+      QUARANTINE_SERVICE_URL: http://quarantine-service:8000
+    depends_on:
+      admin-panel-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - antifraud-net
+
+  ingestion-db:
+    image: postgres:16
+    container_name: ingestion-db
+    environment:
+      POSTGRES_DB: ingestion_db
+      POSTGRES_USER: ingestion
+      POSTGRES_PASSWORD: ingestion
+    volumes:
+      - ingestion_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ingestion -d ingestion_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - antifraud-net
+
+  risk-scoring-db:
+    image: postgres:16
+    container_name: risk-scoring-db
+    environment:
+      POSTGRES_DB: risk_scoring_db
+      POSTGRES_USER: risk_scoring
+      POSTGRES_PASSWORD: risk_scoring
+    volumes:
+      - risk_scoring_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U risk_scoring -d risk_scoring_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - antifraud-net
+
+  quarantine-db:
+    image: postgres:16
+    container_name: quarantine-db
+    environment:
+      POSTGRES_DB: quarantine_db
+      POSTGRES_USER: quarantine
+      POSTGRES_PASSWORD: quarantine
+    volumes:
+      - quarantine_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quarantine -d quarantine_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - antifraud-net
+
+  admin-panel-db:
+    image: postgres:16
+    container_name: admin-panel-db
+    environment:
+      POSTGRES_DB: admin_panel_db
+      POSTGRES_USER: admin_panel
+      POSTGRES_PASSWORD: admin_panel
+    volumes:
+      - admin_panel_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin_panel -d admin_panel_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - antifraud-net
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: antifraud
+      RABBITMQ_DEFAULT_PASS: antifraud
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - antifraud-net
+
+networks:
+  antifraud-net:
+    driver: bridge
+
+volumes:
+  ingestion_pgdata:
+  risk_scoring_pgdata:
+  quarantine_pgdata:
+  admin_panel_pgdata:
+  rabbitmq_data:
