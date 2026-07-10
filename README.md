@@ -49,7 +49,7 @@ flowchart TD
     adminBackend["Admin Panel Service"]
     broker{{"Message Broker"}}
 
-    plataforma -->|"Eventos de ação (REST)"| gateway
+    plataforma -->|"Eventos de ação"| gateway
     admin -->|"Consultas e comandos (REST)"| gateway
 
     gateway -->|"Roteia eventos"| ingestion
@@ -76,12 +76,12 @@ flowchart TD
 
 | Microsserviço | Responsabilidade |
 |---|---|
-| **API Gateway** | Ponto único de entrada; roteia requisições externas para os serviços internos |
-| **Ingestion Service** | Recebe e normaliza eventos brutos de ação do jogador vindos da Plataforma de Jogos |
-| **Risk Scoring Service** | Calcula o risk score multifatorial a partir dos eventos consumidos |
-| **Quarantine Service** | Aplica e gerencia a quarentena automática com base no threshold de risco |
-| **Admin Panel Service** | Serve o Painel Admin; expõe casos suspeitos e envia comandos de liberação |
-| **Message Broker** | Infraestrutura de mensageria assíncrona entre os serviços de domínio |
+| **API Gateway** | Ponto único de entrada para requisições externas (Plataforma de Jogos e Administrador). Roteia cada requisição para o serviço interno correto |
+| **Ingestion Service** | Recebe os eventos brutos de ação do jogador vindos da Plataforma de Jogos (cliques, escolhas, timestamps, device fingerprint) e os valida/normaliza antes de publicá-los internamente |
+| **Risk Scoring Service** | Consome os eventos de ação, calcula o risk score multifatorial (device fingerprint + velocidade + padrão de escolhas + correlação entre contas) |
+| **Quarantine Service** | Escuta scores de risco alto, aplica a quarentena automática com base no threshold configurado, e gerencia o ciclo de vida da quarentena (aplicar/liberar) |
+| **Admin Panel Service** | Backend que serve o Painel Admin: expõe os casos suspeitos/em quarentena para revisão humana e envia comandos de liberação manual |
+| **Message Broker** | Infraestrutura de mensageria (não é um microsserviço de negócio, é a peça que viabiliza a comunicação assíncrona entre os serviços acima) |
 
 Cada microsserviço de domínio possui **seu próprio banco de dados** (Database-per-service).
 
@@ -99,8 +99,6 @@ Cada microsserviço de domínio possui **seu próprio banco de dados** (Database
 ---
 
 ## Decisões Arquiteturais (ADRs)
-
-Os ADRs completos também estão disponíveis em [`docs/adr/`](./docs/adr/).
 
 ### ADR 001 — Escolha do Message Broker
 
