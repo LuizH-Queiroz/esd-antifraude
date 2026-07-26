@@ -133,6 +133,22 @@ Cada microsserviço de domínio possui **seu próprio banco de dados** (Database
 
 ---
 
+### ADR 003 — Base de Dados para Entrada de Dados
+
+**Status:** Aceito
+
+**Contexto:** Precisamos de dados que sirvam de entrada para o Sistema Antifraude. Esses dados são enviados pela Plataforma de Jogos. Sendo assim, a escolha do banco de dados é de extrema importância, pois sua escolha definirá o contexto no qual o sistema irá trabalhar, impactando de forma direta e em especial o Risk Scoring Service. A escolha de uma boa base de dados é essencial para que o time possa focar no desenho de uma boa arquitetura e desenvolvimento dos microsserviços, sem se preocupar com problemas relacionados à base de dados, como normalização de dados, filtragem de um número grande de colunas, remoção de linhas duplicadas ou com pouca informação, entre outros.
+
+**Decisão:** Escolhemos a base de dados [Synthetic Financial Datasets For Fraud Detection](https://www.kaggle.com/datasets/ealaxi/paysim1?select=PS_20174392719_1491204439457_log.csv), que é uma base de dados sintética, mas que simula de forma realista transações financeiras, com um grande número de colunas e linhas. A base de dados foi escolhida por ser de fácil acesso, por ser gratuita e por ser de fácil manipulação, além de ter uma relação direta com o contexto do projeto, que é a detecção de fraudes.
+
+**Alternativas consideradas:**
+- *Base com dados do jogo PUBG* - a base, que se encontra [aqui](https://www.kaggle.com/code/atharvparbalkar/cheater-detection-pubg/input?select=train_V2.csv), apesar de ter muitos dados e colunas com fácil interpretação, foi descartada por não ter uma relação direta com o contexto do projeto. Dessa forma, provavelmente o grupo gastaria um tempo significativa para transformá-la em algo que fosse mais útil ao nosso objetivo e escopo.
+
+**Consequências:**
+- Temos uma base de dados que simula de forma realista transações financeiras, com um grande número e linhas e atributos simples, que nos permite focar no desenho de uma boa arquitetura e desenvolvimento dos microsserviços, sem se preocupar com problemas relacionados à base de dados.
+
+---
+
 ## Stack Tecnológico
 
 | Camada | Escolha | Justificativa |
