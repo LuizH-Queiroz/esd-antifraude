@@ -1,0 +1,11 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.py[cod]
+*.log
+.env
+
+# A base tem centenas de MB e não deve ser incorporada à imagem.
+# O Docker Compose a disponibiliza por bind mount em /app/data.
+data/*.csv
+data/.cache/

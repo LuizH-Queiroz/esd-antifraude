@@ -33,3 +33,8 @@ Thumbs.db
 # IDE/editor
 .vscode/
 .idea/
+
+# PaySim dataset and generated random-access index
+simulator/data/*.csv
+simulator/data/.cache/
+
