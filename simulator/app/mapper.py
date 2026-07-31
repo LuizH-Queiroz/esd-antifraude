@@ -7,8 +7,9 @@ a maior parte de uma eventual adaptação ficará concentrada aqui.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from app.models import PaySimTransaction
@@ -20,20 +21,25 @@ class TransactionMessageMapper:
     def __init__(
         self,
         *,
+        selection_strategy: str = "sequential",
         include_balance_fields: bool = False,
         include_ground_truth: bool = False,
         uuid_factory: Callable[[], UUID] = uuid4,
         now_factory: Callable[[], datetime] | None = None,
     ) -> None:
+        # Reporta a estratégia de fato usada (sequencial ou aleatória com
+        # reposição) em vez de um valor fixo, já que agora ambas coexistem
+        # (ver SAMPLING_STRATEGY em app/config.py e a discussão na Issue #5).
+        self.selection_strategy = selection_strategy
         self.include_balance_fields = include_balance_fields
         self.include_ground_truth = include_ground_truth
         self._uuid_factory = uuid_factory
-        self._now_factory = now_factory or (lambda: datetime.now(timezone.utc))
+        self._now_factory = now_factory or (lambda: datetime.now(UTC))
 
     def to_message(self, transaction: PaySimTransaction) -> dict[str, Any]:
         """Converte uma transação em uma mensagem JSON pronta para envio."""
         event_id = str(self._uuid_factory())
-        occurred_at = self._now_factory().astimezone(timezone.utc)
+        occurred_at = self._now_factory().astimezone(UTC)
 
         message: dict[str, Any] = {
             "event_id": event_id,
@@ -49,7 +55,7 @@ class TransactionMessageMapper:
             },
             "simulation_metadata": {
                 "dataset": "PaySim",
-                "selection": "random_with_replacement",
+                "selection": self.selection_strategy,
             },
         }
 
