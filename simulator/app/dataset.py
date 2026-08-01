@@ -1,20 +1,35 @@
-"""Acesso aleatório e eficiente ao CSV da PaySim.
+"""Acesso eficiente ao CSV da PaySim, com dois modos de leitura.
 
 A base completa possui milhões de registros. Carregá-la inteira com pandas
 consumiria memória desnecessariamente, e percorrê-la do começo ao fim antes de
-cada envio seria muito lento.
+cada envio seria muito lento. Por isso, na primeira execução, o simulador faz
+uma única passagem pelo CSV para registrar, em um arquivo binário (o
+"índice"), a posição (offset em bytes) de cada linha de dados. A partir daí,
+qualquer linha pode ser lida diretamente, sem reler o arquivo inteiro.
 
-A estratégia adotada é:
+Esse índice é compartilhado pelos dois modos de leitura oferecidos aqui:
 
-1. Na primeira execução, fazer uma única leitura para registrar, em um arquivo
-   binário, a posição inicial de cada linha de dados.
-2. Em cada sorteio, escolher uniformemente um número de linha.
-3. Ler no índice apenas os 8 bytes daquela posição e saltar diretamente para a
-   linha correspondente no CSV.
+* ``SequentialPaySimReader`` (padrão) — percorre o CSV **na ordem original**
+  (que já é cronológica, por ``step``), retomando de onde parou entre uma
+  execução e outra via um checkpoint persistido em disco. Esse é o modo
+  correto para o objetivo do sistema: o Risk Scoring Service depende de
+  observar múltiplas transações da mesma conta ao longo do tempo (o fator
+  "correlação entre contas" descrito na ADR 003 do README principal), e esse
+  padrão só existe se as linhas forem entregues na ordem em que aconteceram.
+  A ADR 004 também descreve o simulador como um "replay sequencial e espaçado
+  no tempo" — este é o modo que implementa essa descrição.
 
-Depois que o índice existe, cada seleção é O(1), usa pouca memória e não segue a
-ordem do arquivo. O sorteio é feito com reposição, portanto uma mesma transação
-pode ser escolhida novamente em outro envio.
+* ``RandomPaySimSampler`` (opcional) — sorteia uma linha aleatória a cada
+  chamada, com reposição (a mesma linha pode se repetir). Era o comportamento
+  padrão anterior deste arquivo. Ele embaralha a ordem/tempo original das
+  transações, o que quebra os padrões de correlação entre contas que o motor
+  de risco depende para funcionar — por isso deixou de ser o padrão, mas
+  segue disponível (via ``SAMPLING_STRATEGY=random`` — ver app/config.py)
+  para cenários específicos de teste de carga/stress, onde a ordem não
+  importa e o que se quer é apenas volume de eventos variados.
+
+Ambos os modos são O(1) por linha lida (depois que o índice existe) e usam
+memória constante, independentemente do tamanho do dataset.
 """
 
 from __future__ import annotations
@@ -25,9 +40,10 @@ import logging
 import os
 import random
 import struct
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Sequence
+from typing import BinaryIO
 
 from app.models import PaySimTransaction
 
@@ -72,7 +88,7 @@ class DatasetIndexMetadata:
         }
 
     @classmethod
-    def from_json(cls, value: dict[str, object]) -> "DatasetIndexMetadata":
+    def from_json(cls, value: dict[str, object]) -> DatasetIndexMetadata:
         return cls(
             version=int(value["version"]),
             dataset_size=int(value["dataset_size"]),
@@ -82,27 +98,37 @@ class DatasetIndexMetadata:
         )
 
 
-class RandomPaySimSampler:
-    """Seleciona linhas aleatórias da PaySim com distribuição uniforme."""
+class PaySimIndex:
+    """Constrói e consulta o índice de offsets de bytes do CSV da PaySim.
 
-    def __init__(
-        self,
-        dataset_path: Path,
-        index_path: Path,
-        *,
-        random_seed: int | None = None,
-    ) -> None:
+    Esta classe concentra toda a lógica de indexação que antes vivia dentro
+    de ``RandomPaySimSampler``. Extraí-la permite que os dois modos de
+    leitura (sequencial e aleatório) compartilhem exatamente o mesmo índice,
+    sem duplicar código nem risco de os dois modos ficarem
+    inconsistentes entre si.
+    """
+
+    def __init__(self, dataset_path: Path, index_path: Path) -> None:
         self.dataset_path = dataset_path.resolve()
         self.index_path = index_path.resolve()
         self.metadata_path = self.index_path.with_suffix(self.index_path.suffix + ".json")
-        self._random = random.Random(random_seed)
         self._metadata: DatasetIndexMetadata | None = None
+
+    @property
+    def is_ready(self) -> bool:
+        return self._metadata is not None
 
     @property
     def row_count(self) -> int:
         if self._metadata is None:
-            raise DatasetError("O sampler ainda não foi preparado.")
+            raise DatasetError("O índice ainda não foi preparado (chame prepare() antes).")
         return self._metadata.row_count
+
+    @property
+    def columns(self) -> tuple[str, ...]:
+        if self._metadata is None:
+            raise DatasetError("O índice ainda não foi preparado (chame prepare() antes).")
+        return self._metadata.columns
 
     def prepare(self, *, rebuild_index: bool = False) -> None:
         """Valida a base e cria/reutiliza o índice de posições."""
@@ -120,18 +146,46 @@ class RandomPaySimSampler:
 
         self._metadata = self._build_index()
 
-    def sample(self) -> PaySimTransaction:
-        """Sorteia e devolve exatamente uma transação aleatória."""
-        if self._metadata is None:
-            self.prepare()
+    def get_offset(self, row_number: int) -> int:
+        """Retorna o offset (em bytes) do início da linha `row_number`."""
+        with self.index_path.open("rb") as index_file:
+            index_file.seek(row_number * INDEX_ENTRY.size)
+            packed_offset = index_file.read(INDEX_ENTRY.size)
 
-        assert self._metadata is not None
-        random_row_number = self._random.randrange(self._metadata.row_count)
-        byte_offset = self._read_offset(random_row_number)
-        values = self._read_csv_values(byte_offset)
+        if len(packed_offset) != INDEX_ENTRY.size:
+            raise DatasetError(f"O índice terminou antes da linha {row_number}.")
+        return INDEX_ENTRY.unpack(packed_offset)[0]
 
-        row = dict(zip(self._metadata.columns, values, strict=True))
-        return PaySimTransaction.from_csv_row(row)
+    def read_row_values(self, byte_offset: int) -> Sequence[str]:
+        """Lê e faz o parse CSV de uma única linha, a partir de um offset conhecido."""
+        with self.dataset_path.open("rb") as dataset_file:
+            dataset_file.seek(byte_offset)
+            line_bytes = dataset_file.readline()
+
+        return self.parse_csv_line(line_bytes, byte_offset)
+
+    def parse_csv_line(self, line_bytes: bytes, byte_offset: int) -> Sequence[str]:
+        """Faz o parse CSV de uma linha crua já lida do arquivo.
+
+        Exposto como método público (não apenas usado internamente) porque
+        ``SequentialPaySimReader`` também precisa fazer esse mesmo parse ao
+        ler a próxima linha de um arquivo já posicionado, sem reabrir/buscar
+        o offset novamente.
+        """
+        try:
+            line_text = line_bytes.decode("utf-8")
+            values = next(csv.reader([line_text]))
+        except (UnicodeDecodeError, csv.Error, StopIteration) as exc:
+            raise DatasetError(
+                f"Não foi possível interpretar a linha no offset {byte_offset}."
+            ) from exc
+
+        if len(values) != len(EXPECTED_COLUMNS):
+            raise DatasetError(
+                f"Linha no offset {byte_offset} possui {len(values)} campos; "
+                f"esperados: {len(EXPECTED_COLUMNS)}."
+            )
+        return values
 
     def _ensure_dataset_exists(self) -> None:
         if not self.dataset_path.is_file():
@@ -246,31 +300,178 @@ class RandomPaySimSampler:
             )
         return columns
 
-    def _read_offset(self, row_number: int) -> int:
-        with self.index_path.open("rb") as index_file:
-            index_file.seek(row_number * INDEX_ENTRY.size)
-            packed_offset = index_file.read(INDEX_ENTRY.size)
 
-        if len(packed_offset) != INDEX_ENTRY.size:
-            raise DatasetError("O índice terminou antes da posição sorteada.")
-        return INDEX_ENTRY.unpack(packed_offset)[0]
+class SequentialPaySimReader:
+    """Percorre o CSV da PaySim em ordem, retomando de onde parou entre execuções.
 
-    def _read_csv_values(self, byte_offset: int) -> Sequence[str]:
-        with self.dataset_path.open("rb") as dataset_file:
-            dataset_file.seek(byte_offset)
-            line_bytes = dataset_file.readline()
+    Este é o modo padrão do simulador (ver SAMPLING_STRATEGY em app/config.py).
+    Como o PaySim já vem ordenado por `step` (tempo simulado), ler
+    sequencialmente preserva os padrões temporais e de correlação entre
+    contas (`nameOrig`/`nameDest`) que o Risk Scoring Service vai precisar
+    observar — ao contrário da amostragem aleatória, que embaralha essa ordem.
 
-        try:
-            line_text = line_bytes.decode("utf-8")
-            values = next(csv.reader([line_text]))
-        except (UnicodeDecodeError, csv.Error, StopIteration) as exc:
-            raise DatasetError(
-                f"Não foi possível interpretar a linha no offset {byte_offset}."
-            ) from exc
+    A posição atual (próxima linha a ler) é salva periodicamente em um
+    arquivo de checkpoint. Isso permite parar e reiniciar o simulador (ex.:
+    `docker compose restart simulator`) sem repetir desde o início nem perder
+    o lugar — importante numa simulação "de tempo real" contínua.
+    """
 
-        if len(values) != len(EXPECTED_COLUMNS):
-            raise DatasetError(
-                f"Linha no offset {byte_offset} possui {len(values)} campos; "
-                f"esperados: {len(EXPECTED_COLUMNS)}."
+    def __init__(
+        self,
+        dataset_path: Path,
+        index_path: Path,
+        checkpoint_path: Path,
+        *,
+        checkpoint_every_messages: int = 20,
+    ) -> None:
+        self.index = PaySimIndex(dataset_path, index_path)
+        self.checkpoint_path = checkpoint_path.resolve()
+        self.checkpoint_every_messages = checkpoint_every_messages
+
+        self._current_row = 0
+        self._file_handle: BinaryIO | None = None
+        self._pending_since_checkpoint = 0
+
+    @property
+    def row_count(self) -> int:
+        return self.index.row_count
+
+    def prepare(self, *, rebuild_index: bool = False, reset_checkpoint: bool = False) -> None:
+        """Prepara o índice e posiciona a leitura no ponto correto de retomada."""
+        self.index.prepare(rebuild_index=rebuild_index)
+
+        self._current_row = 0 if reset_checkpoint else self._load_checkpoint()
+        self._reopen_at(self._current_row)
+
+        LOGGER.info(
+            "Leitura sequencial da PaySim: retomando na linha %s de %s (%.2f%% percorrido).",
+            self._current_row,
+            self.index.row_count,
+            100 * self._current_row / self.index.row_count,
+        )
+
+    def sample(self) -> PaySimTransaction:
+        """Lê e devolve a próxima transação, na ordem original do CSV.
+
+        O nome `sample()` é mantido igual ao de `RandomPaySimSampler` de
+        propósito: o restante do simulador (runner.py) não precisa saber
+        qual estratégia de leitura está em uso por trás dessa chamada.
+        """
+        if not self.index.is_ready:
+            self.prepare()
+
+        if self._current_row >= self.index.row_count:
+            LOGGER.warning(
+                "Fim do dataset PaySim atingido (linha %s); reiniciando a leitura "
+                "sequencial a partir do início (loop). Isso só deve ocorrer em "
+                "execuções muito longas ou de teste.",
+                self.index.row_count,
             )
-        return values
+            self._current_row = 0
+            self._reopen_at(0)
+
+        assert self._file_handle is not None
+        raw_line = self._file_handle.readline()
+        if not raw_line:
+            # Proteção extra contra um EOF inesperado antes do fim contado pelo
+            # índice (ex.: arquivo truncado externamente durante a execução).
+            LOGGER.warning("EOF inesperado antes do fim do índice; reiniciando do início.")
+            self._current_row = 0
+            self._reopen_at(0)
+            raw_line = self._file_handle.readline()
+
+        values = self.index.parse_csv_line(raw_line, self._current_row)
+        row = dict(zip(self.index.columns, values, strict=True))
+        transaction = PaySimTransaction.from_csv_row(row)
+
+        self._current_row += 1
+        self._pending_since_checkpoint += 1
+        if self._pending_since_checkpoint >= self.checkpoint_every_messages:
+            self._save_checkpoint()
+
+        return transaction
+
+    def flush_checkpoint(self) -> None:
+        """Persiste a posição atual imediatamente (chamado ao encerrar o simulador)."""
+        self._save_checkpoint()
+
+    def close(self) -> None:
+        if self._file_handle is not None:
+            self._file_handle.close()
+            self._file_handle = None
+
+    def _reopen_at(self, row_number: int) -> None:
+        offset = self.index.get_offset(row_number)
+        self.close()
+        self._file_handle = self.index.dataset_path.open("rb")
+        self._file_handle.seek(offset)
+
+    def _load_checkpoint(self) -> int:
+        if not self.checkpoint_path.is_file():
+            return 0
+        try:
+            data = json.loads(self.checkpoint_path.read_text(encoding="utf-8"))
+            row_number = int(data.get("next_row", 0))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            LOGGER.warning("Checkpoint sequencial inválido ou corrompido; reiniciando do início.")
+            return 0
+
+        if not (0 <= row_number < self.index.row_count):
+            LOGGER.warning(
+                "Checkpoint aponta para uma linha fora do dataset atual; reiniciando do início."
+            )
+            return 0
+        return row_number
+
+    def _save_checkpoint(self) -> None:
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = self.checkpoint_path.with_suffix(
+            self.checkpoint_path.suffix + ".tmp"
+        )
+        temporary_path.write_text(
+            json.dumps({"next_row": self._current_row}), encoding="utf-8"
+        )
+        temporary_path.replace(self.checkpoint_path)  # escrita atômica
+        self._pending_since_checkpoint = 0
+
+
+class RandomPaySimSampler:
+    """Seleciona linhas aleatórias da PaySim com distribuição uniforme e reposição.
+
+    Modo opcional (SAMPLING_STRATEGY=random) — ver o aviso no topo deste
+    arquivo sobre por que este deixou de ser o padrão.
+    """
+
+    def __init__(
+        self,
+        dataset_path: Path,
+        index_path: Path,
+        *,
+        random_seed: int | None = None,
+    ) -> None:
+        self.index = PaySimIndex(dataset_path, index_path)
+        self._random = random.Random(random_seed)
+
+    @property
+    def row_count(self) -> int:
+        return self.index.row_count
+
+    def prepare(self, *, rebuild_index: bool = False, reset_checkpoint: bool = False) -> None:
+        # `reset_checkpoint` não se aplica a este modo (não há posição a retomar);
+        # o parâmetro existe só para manter a mesma assinatura de chamada que
+        # SequentialPaySimReader, permitindo que main.py trate os dois modos de
+        # forma intercambiável.
+        del reset_checkpoint
+        self.index.prepare(rebuild_index=rebuild_index)
+
+    def sample(self) -> PaySimTransaction:
+        """Sorteia e devolve exatamente uma transação aleatória."""
+        if not self.index.is_ready:
+            self.prepare()
+
+        random_row_number = self._random.randrange(self.index.row_count)
+        byte_offset = self.index.get_offset(random_row_number)
+        values = self.index.read_row_values(byte_offset)
+
+        row = dict(zip(self.index.columns, values, strict=True))
+        return PaySimTransaction.from_csv_row(row)

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
-
 
 PAYMENT_TYPES = {"CASH_IN", "CASH_OUT", "DEBIT", "PAYMENT", "TRANSFER"}
 
@@ -35,7 +34,7 @@ class PaySimTransaction:
     is_flagged_fraud: bool
 
     @classmethod
-    def from_csv_row(cls, row: Mapping[str, str]) -> "PaySimTransaction":
+    def from_csv_row(cls, row: Mapping[str, str]) -> PaySimTransaction:
         try:
             transaction_type = row["type"].strip().upper()
             if transaction_type not in PAYMENT_TYPES:

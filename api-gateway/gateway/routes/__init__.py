@@ -1,0 +1,1 @@
+"""Rotas HTTP expostas pelo API Gateway, agrupadas por origem/destino."""

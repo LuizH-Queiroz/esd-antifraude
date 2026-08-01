@@ -11,14 +11,17 @@ services:
       API_GATEWAY_URL: http://api-gateway:8000
     depends_on:
       api-gateway:
-        condition: service_started
+        condition: service_healthy
     networks:
       - antifraud-net
 
   api-gateway:
     build: ./api-gateway
     container_name: api-gateway
-    command: tail -f /dev/null
+    # O api-gateway já está implementado (ver Issue #5), então, diferente dos
+    # demais serviços abaixo (ainda placeholders), ele já sobe executando o
+    # servidor de verdade — sem o "command: tail -f /dev/null" que os outros
+    # usam enquanto não são implementados.
     ports:
       - "8080:8000"
     volumes:
@@ -26,6 +29,11 @@ services:
     environment:
       INGESTION_SERVICE_URL: http://ingestion-service:8000
       ADMIN_PANEL_SERVICE_URL: http://admin-panel-service:8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     networks:
       - antifraud-net
 

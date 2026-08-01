@@ -1,2 +1,7 @@
-pytest==8.3.3
-ruff==0.6.9
+pytest==9.1.1
+ruff==0.16.1
+
+# Necessárias para o CI da raiz rodar os testes do api-gateway
+# (tests/test_api_gateway.py) sem precisar subir o Docker Compose inteiro.
+fastapi==0.141.1
+httpx==0.28.1
