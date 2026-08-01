@@ -401,7 +401,7 @@ class SequentialPaySimReader:
             self._file_handle = None
 
     def _reopen_at(self, row_number: int) -> None:
-        offset = 0 if row_number == 0 else self.index.get_offset(row_number)
+        offset = self.index.get_offset(row_number)
         self.close()
         self._file_handle = self.index.dataset_path.open("rb")
         self._file_handle.seek(offset)

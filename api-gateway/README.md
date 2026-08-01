@@ -110,6 +110,29 @@ Os logs do Gateway devem mostrar cada evento sendo recebido e a tentativa de
 roteamento para o Ingestion Service (com a consequente falha 503, esperada
 nesta fase).
 
+## Testes automatizados
+
+Os testes do Gateway ficam em `tests/test_api_gateway.py`, **na raiz do
+repositório** (não dentro de `api-gateway/`), porque rodam junto com o
+restante da suíte do projeto e usam um `conftest.py` também na raiz para
+tornar o pacote `gateway` importável. Rode-os sempre a partir da raiz:
+
+```bash
+cd esd-antifraude   # raiz do repositório, não api-gateway/
+python3 -m venv .venv        # se ainda não tiver um venv
+source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -r requirements-dev.txt
+
+pytest -q          # roda os testes (do Gateway e de qualquer outro serviço)
+ruff check .       # confere o estilo de todo o repositório
+```
+
+Não é preciso ter o Docker Compose rodando nem nenhum serviço interno de pé
+para esses testes passarem — pelo contrário, eles verificam justamente que
+o Gateway se comporta corretamente quando os serviços internos **não**
+existem (retornando 503, e não travando ou quebrando). Rode-os depois de
+qualquer mudança em `gateway/`, e sempre antes de abrir um PR.
+
 ## Estrutura do código
 api-gateway/
 
