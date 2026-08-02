@@ -21,17 +21,6 @@ Os dois nomes se parecem, mas representam papéis diferentes no sistema:
 Este README documenta o contrato entre os dois — como a consulta funciona
 na prática — que era a lacuna deixada em aberto até esta issue.
 
-## Estado atual
-
-Este serviço ainda não tem código (`Dockerfile` vazio, sobe com
-`command: tail -f /dev/null` no `docker-compose.yml`). Esta é uma issue de
-**documentação**: define o contrato antes da implementação, que depende da
-conclusão de outras issues em andamento (em especial, o Quarantine Service
-publicar de fato os eventos `ContaEmQuarentena`/`ContaLiberada`). Assim que
-essas dependências forem resolvidas, este README é o ponto de partida para a
-implementação — o objetivo é que o código apenas siga o que já está decidido
-aqui, sem redesenhar o contrato durante a implementação.
-
 ## 1. Quais requisições o Administrador pode fazer?
 
 Proposta de contrato REST, roteado pelo API Gateway através do proxy
@@ -92,28 +81,8 @@ quarentena — filtro e paginação são suportados porque são necessários par
 qualquer API de listagem ser usável, mas **agregações analíticas não são
 responsabilidade deste serviço**.
 
-Isso responde diretamente ao exemplo levantado na issue: calcular "número de
-contas bloqueadas na última hora" **não** deveria ser feito aqui. Motivos:
-
-- Mantém o serviço com responsabilidade única — projetar o estado de
-  quarentena, não fazer analytics.
-- Evita acoplar lógica de negócio analítica (janelas de tempo, definições de
-  métrica) a um serviço que hoje é essencialmente consumidor de eventos +
-  API de consulta — lógica que tende a mudar com mais frequência e por
-  motivos diferentes do contrato de dados em si.
-- Se esse tipo de agregação vier a ser necessário, cabe ao lado do
-  Administrador (dashboard) computá-la a partir dos dados brutos, ou — se a
-  demanda crescer — a um read model dedicado no futuro, criado
-  propositalmente para isso, não misturado ao contrato de consulta de casos.
-
-Esse ponto fica em aberto para discussão do grupo nos comentários da issue,
-caso alguém veja um motivo forte para agregação já no serviço.
 
 ## Padrões arquiteturais
-
-Segundo o README principal, hoje o Admin Panel Service só participa do
-**SAGA (Choreography)** (`Risk Scoring → Quarantine → Admin Panel`). Revisão
-proposta por esta issue:
 
 | Padrão | Aplica ao Admin Panel Service? | Motivação |
 |---|---|---|
@@ -122,9 +91,7 @@ proposta por esta issue:
 | **Event Sourcing** | Proposto (audit trail das ações do Administrador) | O comando de liberação (`POST /cases/{id}/release`) é uma decisão humana que o sistema pode precisar justificar depois — guardar essas ações como um log append-only (quem liberou, quando, qual caso) é consistente com o motivo de auditabilidade já usado nas ADRs 002 e 004 do README principal |
 | **Anti-corruption Layer** | Não se aplica | O serviço só consome eventos de domínio internos, já no formato canônico do sistema — não há fronteira com um formato externo para traduzir, como no caso do Ingestion Service |
 
-CQRS e Event Sourcing aqui são propostas desta issue, para o grupo validar
-antes da implementação (evitando o retrabalho de mudança tardia de
-arquitetura mencionado na issue). Caso aprovadas, a tabela "Padrões
+Caso aprovadas, a tabela "Padrões
 Arquiteturais Aplicados" do README principal deve ser atualizada para
 refletir o Admin Panel Service nessas linhas.
 
