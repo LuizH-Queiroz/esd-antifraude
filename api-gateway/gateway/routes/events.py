@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from gateway.proxy import forward_json
 from gateway.schemas import TransactionEvent
@@ -24,30 +25,35 @@ LOGGER = logging.getLogger(__name__)
 router = APIRouter(tags=["events"])
 
 
-@router.post("/events/transactions", status_code=202)
-async def receive_transaction_event(event: TransactionEvent, request: Request) -> dict:
+@router.post("/events/transactions")
+async def receive_transaction_event(event: TransactionEvent, request: Request) -> JSONResponse:
     """Recebe um evento de transação e o encaminha ao Ingestion Service.
 
-    Respostas possíveis:
-      - 202 Accepted: evento validado estruturalmente e repassado ao
-        Ingestion Service (o Gateway não espera nem sabe como o Ingestion
-        Service processa o evento — ver ADR 004 sobre o sistema ser
-        out-of-band).
-      - 422 Unprocessable Entity: gerado automaticamente pelo FastAPI/Pydantic
-        se o corpo da requisição não corresponder ao envelope esperado.
-      - 503 Service Unavailable: o Ingestion Service não respondeu (ainda não
-        existe, ou está fora do ar). O simulador já trata este código como
-        retryable (ver simulator/app/client.py), então nenhuma mudança será
-        necessária nele quando o Ingestion Service passar a existir de fato.
+    IMPORTANTE: o status code da resposta é o **mesmo** devolvido pelo
+    Ingestion Service (não um valor fixo). Isso é essencial porque o
+    Ingestion Service pode aceitar um evento (persistindo-o) e ainda assim
+    falhar ao publicá-lo no RabbitMQ — nesse caso ele responde 503, e o
+    Gateway precisa repassar esse 503 para quem chamou, e não mascará-lo
+    como um 202 de sucesso. O simulador já trata 503 como retryable (ver
+    simulator/app/client.py), então essa propagação é o que faz o retry
+    automático funcionar de ponta a ponta.
+
+    Respostas possíveis (refletindo o que o Ingestion Service devolver):
+      - 202 Accepted: evento persistido e publicado com sucesso.
+      - 422 Unprocessable Entity: gerado pelo FastAPI/Pydantic se o corpo
+        da requisição não corresponder ao envelope esperado (validado
+        aqui no próprio Gateway, antes de qualquer chamada de rede).
+      - 503 Service Unavailable: o Ingestion Service não respondeu (não
+        existe/está fora do ar), OU respondeu mas falhou ao publicar no
+        broker depois de já ter persistido o evento.
     """
     settings = request.app.state.settings
     http_client = request.app.state.http_client
 
     # O header Idempotency-Key (já enviado pelo simulador — ver
     # simulator/app/client.py) é repassado sem alterações. Quem decide o que
-    # fazer com uma repetição (ex.: descartar um evento já processado) é o
-    # Ingestion Service, que terá o Event Store — o Gateway é só um roteador,
-    # não deve guardar estado de negócio.
+    # fazer com uma repetição é o Ingestion Service — o Gateway é só um
+    # roteador, não deve guardar estado de negócio.
     idempotency_key = request.headers.get("Idempotency-Key")
     forwarded_headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
 
@@ -65,9 +71,12 @@ async def receive_transaction_event(event: TransactionEvent, request: Request) -
         downstream_response.status_code,
     )
 
-    return {
-        "status": "accepted",
-        "event_id": event.event_id,
-        "routed_to": "ingestion-service",
-        "downstream_status_code": downstream_response.status_code,
-    }
+    return JSONResponse(
+        status_code=downstream_response.status_code,
+        content={
+            "status": "accepted" if downstream_response.status_code < 300 else "rejected",
+            "event_id": event.event_id,
+            "routed_to": "ingestion-service",
+            "downstream_status_code": downstream_response.status_code,
+        },
+    )
