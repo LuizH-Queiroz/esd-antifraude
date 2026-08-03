@@ -1,0 +1,4 @@
+fastapi==0.141.1
+uvicorn[standard]==0.30.6
+asyncpg==0.31.0
+aio-pika==10.0.1

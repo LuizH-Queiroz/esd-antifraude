@@ -1,0 +1,1 @@
+"""Rotas HTTP expostas pelo Ingestion Service."""
