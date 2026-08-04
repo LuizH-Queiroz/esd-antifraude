@@ -87,8 +87,9 @@ responsabilidade deste serviço**.
 | Padrão | Aplica ao Admin Panel Service? | Motivação |
 |---|---|---|
 | **SAGA (Choreography)** | Sim (já documentado) | Consome `ContaEmQuarentena`/`ContaLiberada` e publica `ComandoDeLiberacao`, fechando a cadeia sem orquestrador central |
-| **CQRS** | Proposto | O serviço mantém sua própria projeção de leitura, otimizada para consulta do Administrador, alimentada por eventos publicados pelo lado de escrita (Quarantine Service) — isso é, na prática, o lado de query de um CQRS cujo lado de comando vive em outro serviço |
+
 | **Event Sourcing** | Proposto (audit trail das ações do Administrador) | O comando de liberação (`POST /cases/{id}/release`) é uma decisão humana que o sistema pode precisar justificar depois — guardar essas ações como um log append-only (quem liberou, quando, qual caso) é consistente com o motivo de auditabilidade já usado nas ADRs 002 e 004 do README principal |
+
 | **Anti-corruption Layer** | Não se aplica | O serviço só consome eventos de domínio internos, já no formato canônico do sistema — não há fronteira com um formato externo para traduzir, como no caso do Ingestion Service |
 
 Caso aprovadas, a tabela "Padrões
