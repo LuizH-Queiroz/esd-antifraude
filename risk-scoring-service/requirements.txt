@@ -1,0 +1,12 @@
+fastapi==0.141.1
+uvicorn[standard]==0.30.6
+asyncpg==0.31.0
+aio-pika==10.0.1
+
+# ATENÇÃO: preencher com as MESMAS versões usadas para treinar o modelo,
+# de ml/requirements.txt — não com "a mais recente". Ver explicação no
+# início da mensagem de código.
+pandas==3.0.3
+numpy==2.4.4
+scikit-learn==1.8.0
+joblib==1.5.3

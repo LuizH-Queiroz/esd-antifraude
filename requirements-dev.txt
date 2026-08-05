@@ -8,3 +8,11 @@ httpx==0.28.1
 # Necessárias para o CI da raiz rodar os testes do ingestion-service
 asyncpg==0.31.0
 aio-pika==10.0.1
+
+# Necessárias para o CI da raiz rodar os testes do risk-scoring-service
+# e o teste de paridade de features (compara com ml/features.py) —
+# MESMAS versões de ml/requirements.txt, ver aviso no início da mensagem.
+pandas==3.0.3
+numpy==2.4.4
+scikit-learn==1.8.0
+joblib==1.5.3

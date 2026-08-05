@@ -83,7 +83,7 @@ flowchart LR
 | **Ingestion Service** | Recebe os eventos brutos de transação vindos do Sistema Bancário (tipo, valor, conta de origem, conta de destino, marco temporal) e os valida/traduz para o modelo de domínio interno antes de publicá-los |
 | **Risk Scoring Service** | Consome os eventos de transação e calcula o risk score multifatorial (tipo de transação, valor, padrão temporal, correlação entre contas) |
 | **Quarantine Service** | Escuta scores de risco alto, aplica a quarentena automática com base no threshold configurado, e gerencia o ciclo de vida da quarentena (aplicar/liberar) |
-| **Admin Panel Service** | Backend que serve o Painel Admin: expõe os casos suspeitos/em quarentena para revisão humana e envia comandos de liberação manual. Contrato de API e relação com o Administrador documentados em [`admin-panel-service/README.md`](admin-panel-service/README.md) |
+| **Admin Panel Service** | Backend que serve o Painel Admin: expõe os casos suspeitos/em quarentena para revisão humana e envia comandos de liberação manual |
 | **Message Broker** | Infraestrutura de mensageria (não é um microsserviço de negócio, é a peça que viabiliza a comunicação assíncrona entre os serviços acima) |
 
 Cada microsserviço de domínio possui **seu próprio banco de dados** (Database-per-service).
@@ -94,7 +94,8 @@ Cada microsserviço de domínio possui **seu próprio banco de dados** (Database
 
 | Padrão | Onde se aplica | Motivação |
 |---|---|---|
-| **Event Sourcing** | Risk Scoring Service, Ingestion Service, Quarantine Service e Admin Panel Service (proposto) | Guarda o histórico completo de eventos (não apenas o estado atual), possibilitando **auditoria total** de como cada score e cada decisão de quarentena foi alcançado — essencial para um sistema antifraude, que precisa justificar decisões perante uma conta que as conteste. No Admin Panel Service, cobre também as ações manuais do Administrador (liberações) — ver [`admin-panel-service/README.md`](admin-panel-service/README.md#padrões-arquiteturais) |
+| **Event Sourcing** | Risk Scoring Service, Ingestion Service e Quarantine Service | Guarda o histórico completo de eventos (não apenas o estado atual), possibilitando **auditoria total** de como cada score e cada decisão de quarentena foi alcançado — essencial para um sistema antifraude, que precisa justificar decisões perante uma conta que as conteste |
+| **CQRS** | Risk Scoring Service | Separa o modelo de escrita (eventos brutos de transação) do modelo de leitura (score pré-calculado), já que os dois têm padrões de acesso muito diferentes |
 | **SAGA (Choreography)** | Risk Scoring → Quarantine → Admin Panel | Coordena a cadeia "score alto → aplicar quarentena → notificar admin" através de eventos encadeados, sem necessidade de um orquestrador central dado o tamanho reduzido da cadeia |
 | **Anti-corruption Layer** | Ingestion Service | Traduz o formato externo de transações do Sistema Bancário (colunas `step`, `type`, `amount`, `nameOrig`, `nameDest`) para o modelo de domínio interno, isolando o sistema de mudanças no contrato externo |
 
