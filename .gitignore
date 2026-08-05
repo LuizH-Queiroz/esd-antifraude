@@ -38,3 +38,8 @@ Thumbs.db
 simulator/data/*.csv
 simulator/data/.cache/
 
+# PaySim dataset (segunda cópia, usada pelo pipeline de ML) e artefatos
+# gerados pelo treino (modelo .joblib, métricas, scores por conta) — cada
+# integrante gera/baixa o seu localmente, não versionamos.
+risk-scoring-service/ml/data/*.csv
+risk-scoring-service/ml/artifacts/

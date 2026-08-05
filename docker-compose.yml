@@ -66,26 +66,30 @@ services:
         - antifraud-net
 
   risk-scoring-service:
-    build: ./risk-scoring-service
-    container_name: risk-scoring-service
-    command: tail -f /dev/null
-    ports:
-      - "8002:8000"
-    volumes:
-      - ./risk-scoring-service:/app
-    environment:
-      DATABASE_URL: postgresql://risk_scoring:risk_scoring@risk-scoring-db:5432/risk_scoring_db
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: antifraud
-      RABBITMQ_PASSWORD: antifraud
-    depends_on:
-      risk-scoring-db:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    networks:
-      - antifraud-net
+      build: ./risk-scoring-service
+      container_name: risk-scoring-service
+      ports:
+        - "8002:8000"
+      volumes:
+        - ./risk-scoring-service:/app
+      environment:
+        DATABASE_URL: postgresql://risk_scoring:risk_scoring@risk-scoring-db:5432/risk_scoring_db
+        RABBITMQ_HOST: rabbitmq
+        RABBITMQ_PORT: 5672
+        RABBITMQ_USER: antifraud
+        RABBITMQ_PASSWORD: antifraud
+      healthcheck:
+        test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+        interval: 5s
+        timeout: 5s
+        retries: 10
+      depends_on:
+        risk-scoring-db:
+          condition: service_healthy
+        rabbitmq:
+          condition: service_healthy
+      networks:
+        - antifraud-net
 
   quarantine-service:
     build: ./quarantine-service
