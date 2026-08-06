@@ -14,14 +14,9 @@ services:
         condition: service_healthy
     networks:
       - antifraud-net
-
   api-gateway:
     build: ./api-gateway
     container_name: api-gateway
-    # O api-gateway já está implementado (ver Issue #5), então, diferente dos
-    # demais serviços abaixo (ainda placeholders), ele já sobe executando o
-    # servidor de verdade — sem o "command: tail -f /dev/null" que os outros
-    # usam enquanto não são implementados.
     ports:
       - "8080:8000"
     volumes:
@@ -36,35 +31,31 @@ services:
       retries: 10
     networks:
       - antifraud-net
-
   ingestion-service:
-      build: ./ingestion-service
-      container_name: ingestion-service
-      # Implementado (ver Issue "Ingestion Service e Message Broker") — sem
-      # o placeholder "tail -f /dev/null" que os demais serviços ainda usam.
-      ports:
-        - "8001:8000"
-      volumes:
-        - ./ingestion-service:/app
-      environment:
-        DATABASE_URL: postgresql://ingestion:ingestion@ingestion-db:5432/ingestion_db
-        RABBITMQ_HOST: rabbitmq
-        RABBITMQ_PORT: 5672
-        RABBITMQ_USER: antifraud
-        RABBITMQ_PASSWORD: antifraud
-      healthcheck:
-        test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
-        interval: 5s
-        timeout: 5s
-        retries: 10
-      depends_on:
-        ingestion-db:
-          condition: service_healthy
-        rabbitmq:
-          condition: service_healthy
-      networks:
-        - antifraud-net
-
+    build: ./ingestion-service
+    container_name: ingestion-service
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./ingestion-service:/app
+    environment:
+      DATABASE_URL: postgresql://ingestion:ingestion@ingestion-db:5432/ingestion_db
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: antifraud
+      RABBITMQ_PASSWORD: antifraud
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      ingestion-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - antifraud-net
   risk-scoring-service:
       build: ./risk-scoring-service
       container_name: risk-scoring-service
@@ -89,34 +80,34 @@ services:
         rabbitmq:
           condition: service_healthy
       networks:
+        - antifraud-net  quarantine-service:
+      build: ./quarantine-service
+      container_name: quarantine-service
+      ports:
+        - "8003:8000"
+      volumes:
+        - ./quarantine-service:/app
+      environment:
+        DATABASE_URL: postgresql://quarantine:quarantine@quarantine-db:5432/quarantine_db
+        RABBITMQ_HOST: rabbitmq
+        RABBITMQ_PORT: 5672
+        RABBITMQ_USER: antifraud
+        RABBITMQ_PASSWORD: antifraud
+      healthcheck:
+        test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+        interval: 5s
+        timeout: 5s
+        retries: 10
+      depends_on:
+        quarantine-db:
+          condition: service_healthy
+        rabbitmq:
+          condition: service_healthy
+      networks:
         - antifraud-net
-
-  quarantine-service:
-    build: ./quarantine-service
-    container_name: quarantine-service
-    command: tail -f /dev/null
-    ports:
-      - "8003:8000"
-    volumes:
-      - ./quarantine-service:/app
-    environment:
-      DATABASE_URL: postgresql://quarantine:quarantine@quarantine-db:5432/quarantine_db
-      RABBITMQ_HOST: rabbitmq
-      RABBITMQ_PORT: 5672
-      RABBITMQ_USER: antifraud
-      RABBITMQ_PASSWORD: antifraud
-    depends_on:
-      quarantine-db:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-    networks:
-      - antifraud-net
-
   admin-panel-service:
     build: ./admin-panel-service
     container_name: admin-panel-service
-    command: tail -f /dev/null
     ports:
       - "8004:8000"
     volumes:
@@ -128,6 +119,11 @@ services:
       RABBITMQ_USER: antifraud
       RABBITMQ_PASSWORD: antifraud
       QUARANTINE_SERVICE_URL: http://quarantine-service:8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     depends_on:
       admin-panel-db:
         condition: service_healthy
@@ -135,7 +131,6 @@ services:
         condition: service_healthy
     networks:
       - antifraud-net
-
   ingestion-db:
     image: postgres:16
     container_name: ingestion-db
@@ -152,7 +147,6 @@ services:
       retries: 10
     networks:
       - antifraud-net
-
   risk-scoring-db:
     image: postgres:16
     container_name: risk-scoring-db
@@ -169,7 +163,6 @@ services:
       retries: 10
     networks:
       - antifraud-net
-
   quarantine-db:
     image: postgres:16
     container_name: quarantine-db
@@ -186,7 +179,6 @@ services:
       retries: 10
     networks:
       - antifraud-net
-
   admin-panel-db:
     image: postgres:16
     container_name: admin-panel-db
@@ -203,7 +195,6 @@ services:
       retries: 10
     networks:
       - antifraud-net
-
   rabbitmq:
     image: rabbitmq:3-management
     container_name: rabbitmq
@@ -216,17 +207,19 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test:
+        - CMD-SHELL
+        - rabbitmq-diagnostics -q ping && rabbitmq-diagnostics -q check_port_listener 5672
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
+      start_period: 10s
     networks:
       - antifraud-net
 
 networks:
   antifraud-net:
     driver: bridge
-
 volumes:
   ingestion_pgdata:
   risk_scoring_pgdata:

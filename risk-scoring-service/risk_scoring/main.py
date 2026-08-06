@@ -18,6 +18,7 @@ from risk_scoring.account_stats import AccountStatsStore, PostgresAccountStatsSt
 from risk_scoring.config import Settings
 from risk_scoring.consumer import EventConsumer, RabbitMQEventConsumer
 from risk_scoring.model import FraudModel
+from risk_scoring.publisher import RabbitMQPublisher
 from risk_scoring.routes import accounts, health
 from risk_scoring.scoring import process_transacao_registrada
 
@@ -54,11 +55,22 @@ def create_app(
         fraud_model.load()
         await consumer.initialize()
 
+        publisher = RabbitMQPublisher(
+            amqp_url=settings.rabbitmq_url,
+            exchange_name=settings.exchange_name,
+            routing_key="conta.em-quarentena",
+        )
+        await publisher.initialize()
+
         app.state.account_stats_store = store
 
         async def handle_message(payload: dict) -> None:
             await process_transacao_registrada(
-                payload, store, fraud_model, settings.high_risk_threshold,
+                payload,
+                store,
+                fraud_model,
+                settings.high_risk_threshold,
+                publisher=publisher,
             )
 
         consumer_task = asyncio.create_task(consumer.consume(handle_message))
@@ -71,6 +83,7 @@ def create_app(
             with contextlib.suppress(asyncio.CancelledError):
                 await consumer_task
             await consumer.close()
+            await publisher.close()
             await store.close()
             LOGGER.info("Risk Scoring Service encerrado.")
 

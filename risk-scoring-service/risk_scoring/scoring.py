@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from risk_scoring.account_stats import AccountStatsStore
 from risk_scoring.features import build_stateless_features, step_to_timestamp
@@ -16,12 +17,18 @@ async def process_transacao_registrada(
     stats_store: AccountStatsStore,
     model: FraudModel,
     high_risk_threshold: float,
+    publisher: Any | None = None,
+    quarantine_routing_key: str | None = None,
 ) -> float:
     """Processa um evento já desserializado (dict) publicado pelo Ingestion Service.
 
     Retorna p_fraud principalmente para facilitar testes/logs — não há
     resposta síncrona a dar a ninguém: este serviço é um consumidor de
     fila, não uma rota HTTP (ver ADR 004 sobre o sistema ser out-of-band).
+
+    Se `publisher` for informado e o score calculado atingir
+    `high_risk_threshold`, publica um evento `ScoreAltoRisco` (consumido
+    pelo Quarantine Service) além de registrar o resultado normalmente.
     """
     transaction = payload["transaction"]
     step = transaction["step"]
@@ -70,6 +77,23 @@ async def process_transacao_registrada(
         event_timestamp=event_timestamp,
         high_risk_threshold=high_risk_threshold,
     )
+
+    # 5. Se o score for alto, notifica o Quarantine Service via RabbitMQ.
+    if p_fraud >= high_risk_threshold and publisher is not None:
+        event_payload = {
+            "event_id": payload.get("event_id", f"risk-{origin_account}"),
+            "event_type": "ScoreAltoRisco",
+            "occurred_at": payload.get("occurred_at", "2026-08-06T00:00:00+00:00"),
+            "account_id": origin_account,
+            "risk_score": float(p_fraud),
+            "motivo": "score acima do threshold configurado",
+        }
+        await publisher.publish(event_payload)
+        LOGGER.info(
+            "Evento de risco alto publicado para conta %s com score %.4f.",
+            origin_account,
+            p_fraud,
+        )
 
     LOGGER.info(
         "Evento %s pontuado: p_fraud=%.4f (origin=%s, destination=%s).",

@@ -1,103 +1,134 @@
 # Admin Panel Service
 
-Backend que serve o Painel Admin: consome os eventos publicados pelo
-Quarantine Service, mantém uma projeção consultável dos casos suspeitos/em
-quarentena, e expõe essa projeção ao Administrador via API REST — inclusive
-o comando de liberação manual de uma conta.
+Backend do Painel Admin do Sistema Antifraude. O serviço:
 
-## Administrador × Admin Panel Service
+- consome `ContaEmQuarentena` e `ContaLiberada` do RabbitMQ;
+- mantém uma projeção consultável no PostgreSQL;
+- guarda o histórico append-only dos eventos e ações administrativas;
+- expõe consultas REST;
+- publica `ComandoDeLiberacao` quando um administrador solicita a liberação.
 
-Os dois nomes se parecem, mas representam papéis diferentes no sistema:
+## Rotas
 
-- **Administrador** é um ator humano, externo ao Sistema Antifraude — a
-  pessoa que consulta os casos suspeitos e decide se libera ou mantém uma
-  conta em quarentena.
-- **Admin Panel Service** é um microsserviço interno do Sistema Antifraude.
-  Ele não decide nada sozinho: consome `ContaEmQuarentena`/`ContaLiberada`
-  do broker, guarda essas informações num formato consultável, e traduz as
-  requisições HTTP do Administrador (roteadas pelo API Gateway) em leituras
-  dessa projeção ou no comando `ComandoDeLiberacao`.
-
-Este README documenta o contrato entre os dois — como a consulta funciona
-na prática — que era a lacuna deixada em aberto até esta issue.
-
-## 1. Quais requisições o Administrador pode fazer?
-
-Proposta de contrato REST, roteado pelo API Gateway através do proxy
-genérico `/admin/**` (ver `api-gateway/README.md`) — que deve ser substituído
-por estas rotas específicas assim que o serviço existir:
-
-| Rota | Método | Descrição |
+| Método | Rota | Descrição |
 |---|---|---|
-| `/cases` | `GET` | Lista os casos em quarentena, com filtros (`status`, intervalo de data, faixa de score) e paginação |
-| `/cases/{account_id}` | `GET` | Detalhe de um caso: motivo da quarentena, score, histórico de eventos daquela conta |
-| `/cases/{account_id}/release` | `POST` | Comando de liberação manual — publica `ComandoDeLiberacao` no broker |
-| `/health` | `GET` | Liveness do serviço |
+| `GET` | `/health` | Liveness |
+| `GET` | `/cases` | Lista casos com filtros e paginação |
+| `GET` | `/cases/{account_id}` | Detalha um caso e seu histórico |
+| `POST` | `/cases/{account_id}/release` | Registra e publica um comando de liberação |
 
-Não existe rota para "aplicar" quarentena manualmente — essa decisão é
-sempre automática, tomada pelo Quarantine Service a partir do risk score
-(ver [ADR 004](../README.md#adr-004--sistema-de-detecção-out-of-band-sem-autoridade-de-bloqueio-síncrono)
-no README principal). O papel do Administrador é só revisar e, se for o
-caso, liberar.
+Filtros de `GET /cases`: `status`, `date_from`, `date_to`, `min_score`,
+`max_score`, `page` e `page_size`.
 
-## 2. Quais dados, em que formato?
+Pelo API Gateway, as mesmas chamadas usam o prefixo `/admin`, por exemplo:
+`GET http://localhost:8080/admin/cases`.
 
-JSON, refletindo os campos que o serviço recebe via evento (não dados
-inventados na camada de API):
+## Contratos do RabbitMQ
 
-```jsonc
-// GET /cases (resumo, um item da lista)
+Exchange topic durável: `antifraude.eventos`.
+
+### Evento `ContaEmQuarentena`
+
+Routing key: `conta.em-quarentena`.
+
+```json
 {
+  "event_id": "q-123",
+  "event_type": "ContaEmQuarentena",
+  "occurred_at": "2026-08-04T18:00:00Z",
   "account_id": "C90045638",
-  "status": "EM_QUARENTENA",       // ou "LIBERADA"
   "risk_score": 0.87,
-  "quarantined_at": "2026-08-02T14:03:00Z",
-  "updated_at": "2026-08-02T14:03:00Z"
+  "motivo": "Padrão de transferências encadeadas"
 }
 ```
 
-```jsonc
-// GET /cases/{account_id} (detalhe)
+### Evento `ContaLiberada`
+
+Routing key: `conta.liberada`.
+
+```json
 {
+  "event_id": "l-123",
+  "event_type": "ContaLiberada",
+  "occurred_at": "2026-08-04T18:15:00Z",
   "account_id": "C90045638",
-  "status": "EM_QUARENTENA",
-  "risk_score": 0.87,
-  "motivo": "Padrão de transferências encadeadas entre contas correlacionadas",
-  "eventos": [
-    { "tipo": "ContaEmQuarentena", "occurred_at": "2026-08-02T14:03:00Z" }
-  ]
+  "released_by": "quarantine-service"
 }
 ```
 
-A listagem (`GET /cases`) inclui metadados de paginação (`total`, `page`,
-`page_size`) — necessários para a API ser usável, não é agregação de
-negócio (ver seção 3).
+Os campos de domínio também podem vir dentro de `payload`; isso reduz o
+acoplamento enquanto o Quarantine Service ainda está sendo implementado.
 
-## 3. O serviço processa os dados ou só repassa brutos?
+### Comando `ComandoDeLiberacao`
 
-**Decisão: repassa os dados essencialmente brutos.** O Admin Panel Service
-funciona como uma projeção de leitura (read model) dos eventos de
-quarentena — filtro e paginação são suportados porque são necessários para
-qualquer API de listagem ser usável, mas **agregações analíticas não são
-responsabilidade deste serviço**.
+Routing key: `comando.liberacao`. O serviço declara a fila durável
+`quarantine.comando-liberacao`, evitando perda do comando antes de o
+Quarantine Service começar a consumir.
 
+```json
+{
+  "event_id": "command-uuid",
+  "event_type": "ComandoDeLiberacao",
+  "occurred_at": "2026-08-04T18:10:00+00:00",
+  "account_id": "C90045638",
+  "requested_by": "professor-admin",
+  "motivo": "Revisão manual concluída"
+}
+```
 
-## Padrões arquiteturais
+## Execução
 
-| Padrão | Aplica ao Admin Panel Service? | Motivação |
-|---|---|---|
-| **SAGA (Choreography)** | Sim (já documentado) | Consome `ContaEmQuarentena`/`ContaLiberada` e publica `ComandoDeLiberacao`, fechando a cadeia sem orquestrador central |
+Na raiz do repositório:
 
-| **Event Sourcing** | Proposto (audit trail das ações do Administrador) | O comando de liberação (`POST /cases/{id}/release`) é uma decisão humana que o sistema pode precisar justificar depois — guardar essas ações como um log append-only (quem liberou, quando, qual caso) é consistente com o motivo de auditabilidade já usado nas ADRs 002 e 004 do README principal |
+```bash
+docker compose up --build admin-panel-service api-gateway
+```
 
-| **Anti-corruption Layer** | Não se aplica | O serviço só consome eventos de domínio internos, já no formato canônico do sistema — não há fronteira com um formato externo para traduzir, como no caso do Ingestion Service |
+Swagger direto do serviço: `http://localhost:8004/docs`.
 
-Caso aprovadas, a tabela "Padrões
-Arquiteturais Aplicados" do README principal deve ser atualizada para
-refletir o Admin Panel Service nessas linhas.
+## Exemplos
 
-## Próximos passos
+```bash
+curl "http://localhost:8080/admin/cases?status=EM_QUARENTENA&page=1&page_size=20"
 
-Implementação depende de:
-- Quarantine Service existir e publicar `ContaEmQuarentena`/`ContaLiberada` de fato.
-- API Gateway substituir o proxy genérico `/admin/**` pelas rotas específicas listadas acima.
+curl "http://localhost:8080/admin/cases/C90045638"
+
+curl -X POST "http://localhost:8080/admin/cases/C90045638/release" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: liberacao-C90045638-1" \
+  -d '{"requested_by":"reuben","motivo":"Revisão manual"}'
+```
+
+## Consistência e idempotência
+
+Eventos recebidos são deduplicados por `event_id`. O estado da conta só muda
+para `LIBERADA` quando chega `ContaLiberada`; publicar o comando não altera a
+projeção antecipadamente.
+
+A ação humana é gravada antes da publicação no RabbitMQ. Caso a publicação
+falhe, a API retorna `503`; o cliente deve repetir usando o mesmo header
+`Idempotency-Key`. Assim o audit log não duplica, mas a publicação pode ser
+refeita com semântica at-least-once.
+
+## Testes
+
+A partir da raiz do repositório:
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+ruff check .
+```
+
+Os testes usam repositório e broker em memória; PostgreSQL e RabbitMQ não são
+necessários para a suíte unitária.
+
+## Testando sem o Quarantine Service
+
+Como o Quarantine Service ainda é um placeholder no repositório, publique um
+caso de demonstração de dentro do container:
+
+```bash
+docker compose exec admin-panel-service python scripts/publish_sample_event.py
+curl http://localhost:8080/admin/cases
+```
