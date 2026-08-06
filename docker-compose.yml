@@ -80,7 +80,6 @@ services:
   quarantine-service:
     build: ./quarantine-service
     container_name: quarantine-service
-    command: tail -f /dev/null
     ports:
       - "8003:8000"
     volumes:
@@ -91,6 +90,11 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_USER: antifraud
       RABBITMQ_PASSWORD: antifraud
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     depends_on:
       quarantine-db:
         condition: service_healthy

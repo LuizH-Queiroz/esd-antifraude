@@ -1,0 +1,1 @@
+"""Rotas HTTP expostas pelo Risk Scoring Service (inspeção/health, não o fluxo principal)."""
