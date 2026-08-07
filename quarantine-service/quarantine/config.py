@@ -21,9 +21,13 @@ class Settings:
     released_routing_key: str = "conta.liberada"
     release_command_queue_name: str = "quarantine.comando-liberacao"
     release_command_routing_key: str = "comando.liberacao"
+    # Novas: consumo do evento publicado pelo Risk Scoring Service quando
+    # uma transação atinge o threshold de risco (ver risk-scoring-service).
+    risk_score_queue_name: str = "quarantine.score-alto-risco"
+    risk_score_routing_key: str = "score.alto-risco"
 
     @classmethod
-    def from_environment(cls) -> "Settings":
+    def from_environment(cls) -> Settings:
         rabbitmq_host = os.getenv("RABBITMQ_HOST", "rabbitmq")
         rabbitmq_port = os.getenv("RABBITMQ_PORT", "5672")
         rabbitmq_user = os.getenv("RABBITMQ_USER", "antifraud")
@@ -47,5 +51,11 @@ class Settings:
             ),
             release_command_routing_key=os.getenv(
                 "RABBITMQ_RELEASE_COMMAND_ROUTING_KEY", "comando.liberacao"
+            ),
+            risk_score_queue_name=os.getenv(
+                "RABBITMQ_RISK_SCORE_QUEUE", "quarantine.score-alto-risco"
+            ),
+            risk_score_routing_key=os.getenv(
+                "RABBITMQ_RISK_SCORE_ROUTING_KEY", "score.alto-risco"
             ),
         )

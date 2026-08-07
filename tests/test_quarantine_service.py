@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 
-from quarantine.main import create_app
 from quarantine.broker import InMemoryBroker
+from quarantine.main import create_app
 from quarantine.repository import InMemoryRepository
 
 

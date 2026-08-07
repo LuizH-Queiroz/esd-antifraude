@@ -52,7 +52,7 @@ class Settings:
             database_url=database_url,
             rabbitmq_url=rabbitmq_url,
             exchange_name=os.getenv("RABBITMQ_EXCHANGE", "antifraude.eventos"),
-            queue_name=os.getenv("RABBITMQ_QUEUE", "ingestion.transacao-registrada"),
+            queue_name=os.getenv("RABBITMQ_QUEUE", "transacoes.registradas"),
             routing_key=os.getenv("RABBITMQ_ROUTING_KEY", "transacao.registrada"),
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         )
