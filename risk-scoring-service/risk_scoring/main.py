@@ -58,7 +58,7 @@ def create_app(
         publisher = RabbitMQPublisher(
             amqp_url=settings.rabbitmq_url,
             exchange_name=settings.exchange_name,
-            routing_key="conta.em-quarentena",
+            routing_key="score.alto-risco",
         )
         await publisher.initialize()
 

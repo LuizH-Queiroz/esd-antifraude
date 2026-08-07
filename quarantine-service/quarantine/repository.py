@@ -44,7 +44,9 @@ class InMemoryRepository:
     def upsert(self, state: AccountState) -> None:
         self._states[state.account_id] = state
 
-    def set_quarantined(self, account_id: str, risk_score: float | None, motivo: str | None) -> None:
+    def set_quarantined(
+        self, account_id: str, risk_score: float | None, motivo: str | None
+    ) -> None:
         self._states[account_id] = AccountState(
             account_id=account_id,
             status="EM_QUARENTENA",

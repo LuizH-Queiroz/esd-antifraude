@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import logging
+import os
+
 from fastapi import FastAPI
 
 from quarantine.broker import InMemoryBroker, MessageBroker, RabbitMQBroker
 from quarantine.config import Settings
-from quarantine.consumer import RabbitMQConsumer
+from quarantine.consumer import RabbitMQConsumer, RiskScoreConsumer
 from quarantine.repository import InMemoryRepository
 from quarantine.routes import health_router, internal_router
+
+
+def _configure_logging() -> None:
+    level = os.getenv("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, level, logging.INFO),
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
 
 
 def create_app(
@@ -17,6 +28,8 @@ def create_app(
     broker: MessageBroker | None = None,
     use_rabbitmq: bool | None = None,
 ) -> FastAPI:
+    _configure_logging()
+
     app = FastAPI(title="Quarantine Service")
 
     app.state.repository = (
@@ -49,11 +62,22 @@ def create_app(
             )
             await app.state.consumer.start()
 
+            app.state.risk_score_consumer = RiskScoreConsumer(
+                repository=app.state.repository,
+                broker=app.state.broker,
+                settings=settings,
+            )
+            await app.state.risk_score_consumer.start()
+
     @app.on_event("shutdown")
     async def shutdown_event() -> None:
         consumer = getattr(app.state, "consumer", None)
         if consumer is not None:
             await consumer.stop()
+
+        risk_score_consumer = getattr(app.state, "risk_score_consumer", None)
+        if risk_score_consumer is not None:
+            await risk_score_consumer.stop()
 
         broker_instance = app.state.broker
         if hasattr(broker_instance, "close"):

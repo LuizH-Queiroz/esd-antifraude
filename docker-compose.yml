@@ -69,6 +69,7 @@ services:
         RABBITMQ_PORT: 5672
         RABBITMQ_USER: antifraud
         RABBITMQ_PASSWORD: antifraud
+        HIGH_RISK_THRESHOLD: "0.5"
       healthcheck:
         test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
         interval: 5s
@@ -80,7 +81,8 @@ services:
         rabbitmq:
           condition: service_healthy
       networks:
-        - antifraud-net  quarantine-service:
+        - antifraud-net
+  quarantine-service:
       build: ./quarantine-service
       container_name: quarantine-service
       ports:

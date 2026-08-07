@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from risk_scoring.account_stats import AccountStatsStore
@@ -18,7 +19,6 @@ async def process_transacao_registrada(
     model: FraudModel,
     high_risk_threshold: float,
     publisher: Any | None = None,
-    quarantine_routing_key: str | None = None,
 ) -> float:
     """Processa um evento já desserializado (dict) publicado pelo Ingestion Service.
 
@@ -83,7 +83,7 @@ async def process_transacao_registrada(
         event_payload = {
             "event_id": payload.get("event_id", f"risk-{origin_account}"),
             "event_type": "ScoreAltoRisco",
-            "occurred_at": payload.get("occurred_at", "2026-08-06T00:00:00+00:00"),
+            "occurred_at": payload.get("occurred_at", datetime.now(UTC).isoformat()),
             "account_id": origin_account,
             "risk_score": float(p_fraud),
             "motivo": "score acima do threshold configurado",
