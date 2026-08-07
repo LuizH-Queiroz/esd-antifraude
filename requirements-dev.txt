@@ -1,11 +1,9 @@
 pytest==9.1.1
 ruff==0.16.1
 
-# Necessárias para o CI da raiz rodar os testes do api-gateway
+# Dependências usadas pelos testes dos microsserviços
 fastapi==0.141.1
 httpx==0.28.1
-
-# Necessárias para o CI da raiz rodar os testes do ingestion-service
 asyncpg==0.31.0
 aio-pika==10.0.1
 

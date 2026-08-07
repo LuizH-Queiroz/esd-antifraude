@@ -208,12 +208,215 @@ O Risk Score depende fortemente do fator "correlação entre contas" (cadeias de
 | Claude (Anthropic) | Escrita de documentação | Escrever os documentos, à exemplo deste README, seguindo as diretrizes especificadas, como: ordem das seções, nível de detalhamento, conformidade com o projeto | Muito útil para criar documentação coerente e bem estruturada. Contudo, à medida que as modificações em partes do projeto são decididas e feitas manualmente, fora do escopo da ferramenta, inconsistências vão sendo introduzidas, necessitando constante atualização da ferramenta para mitigar esses erros, além de sempre revisar cuidadosamente o conteúdo gerado |
 | GitHub Copilot | Implementação da camada de CI básica | Propor e estruturar um workflow inicial no GitHub Actions para validar o projeto com lint, testes automatizados e build das imagens Docker em cada push/PR | Foi muito boa para acelerar a automação do fluxo de qualidade do repositório, especialmente em um projeto com múltiplos serviços, mas ainda será preciso revisar os passos à medida que o projeto evolui, a fim de garantir que ela esteja funcional para o contexto real do ambiente e do projeto |
 
+
+## Lições Aprendidas
+
+**Contratos entre microsserviços deveriam ter sido documentados antes da
+implementação, não descobertos durante ela.**
+
+O C4 de Nível 2 definiu claramente **quais** eventos cada serviço publica e
+consome (`TransacaoRegistrada`, `ScoreAltoRisco`, `ContaEmQuarentena`,
+`ComandoDeLiberacao`, `ContaLiberada`). O que não foi documentado com o
+mesmo rigor foi o **formato exato** de cada evento (nomes de campo, tipos,
+routing keys do RabbitMQ) nem o comportamento esperado de cada serviço ao
+processá-los (idempotência, o que fazer em caso de falha parcial, ordem de
+operações).
+
+Como o Ingestion Service, o Risk Scoring Service e a dupla Admin
+Panel/Quarantine Service foram implementados em branches paralelas, sem esse
+contrato fixado, a integração revelou diversos desalinhamentos que só
+apareceram ao testar os serviços conversando de verdade:
+
+- Uma fila do RabbitMQ nomeada a partir de quem a declarou primeiro
+  (`ingestion.transacao-registrada`), e não do evento que carregava —
+  confuso assim que um consumidor de verdade passou a existir.
+- O Risk Scoring Service publicando na routing key do Admin Panel
+  diretamente, pulando o Quarantine Service no meio da cadeia — o C4
+  já definia esse salto como incorreto, mas a implementação divergiu.
+- Um evento nomeado `ScoreAltoRisco` sendo rejeitado por um consumidor que
+  esperava `ContaEmQuarentena` — dois nomes de evento consecutivos na
+  cadeia, fáceis de confundir ao implementar cada ponta isoladamente.
+- Um consumidor inteiro (o que aplica quarentena a partir do score do Risk
+  Scoring Service) documentado no README de um serviço como parte do fluxo,
+  mas nunca implementado — só percebido ao testar a integração de ponta a
+  ponta, não durante a revisão de código de cada serviço isoladamente.
+
+Nenhum desses problemas era complexo de resolver individualmente — mas
+juntos, tomaram uma quantidade de tempo desproporcional ao final do projeto,
+justamente na integração, quando o prazo já estava mais apertado. Se o
+formato de cada evento (um "contrato" por routing key, com um exemplo de
+payload e as regras de idempotência) tivesse sido fixado e documentado antes
+de cada dupla começar a implementar seu serviço, a integração teria sido
+quase mecânica — conectar peças já compatíveis — em vez de um processo de
+descoberta e correção sob pressão de tempo.
+
+Isso também limitou o quanto o trabalho pôde ser paralelizado de verdade: em
+teoria, os 5 microsserviços poderiam ter sido desenvolvidos totalmente em
+paralelo por pessoas diferentes; na prática, a falta de um contrato
+compartilhado significou que boa parte do trabalho de "integração" só podia
+começar depois que os serviços já existiam, em vez de acontecer junto com a
+implementação de cada um.
+
 ---
 
 ## Como Executar
+
+### Pré-requisitos
+
+- Docker e Docker Compose v2 (`docker compose version` deve funcionar).
+- O dataset PaySim baixado do Kaggle
+  ([link](https://www.kaggle.com/datasets/ealaxi/paysim1/data)), colocado em
+  **dois** locais (cada um alimenta uma parte diferente do sistema):
+  - `simulator/data/PS_20174392719_1491204439457_log.csv` — usado pelo Simulador.
+  - `risk-scoring-service/ml/data/PS_20174392719_1491204439457_log.csv` — usado
+    para treinar o modelo de risco.
+- O modelo de fraude treinado (gera o arquivo usado pelo Risk Scoring Service
+  em tempo real):
+```bash
+  cd risk-scoring-service
+  python3 -m ml.train
+  cd ..
+```
+  Isso lê ~6,3 milhões de linhas e pode levar alguns minutos.
+
+### Subindo o sistema completo
+
+Na raiz do repositório:
 
 ```bash
 docker compose up --build
 ```
 
-*(seção a ser completada conforme o setup do ambiente for finalizado pelo grupo)*
+Isso sobe os 5 microsserviços de negócio (`api-gateway`, `ingestion-service`,
+`risk-scoring-service`, `quarantine-service`, `admin-panel-service`), 4 bancos
+PostgreSQL (um por serviço com estado) e o RabbitMQ. O `simulator` fica de
+fora do `up` por padrão (ver abaixo).
+
+Portas expostas no host:
+
+| Serviço | Porta | Doc interativa |
+|---|---|---|
+| API Gateway | `8080` | `http://localhost:8080/docs` |
+| Ingestion Service | `8001` | `http://localhost:8001/docs` |
+| Risk Scoring Service | `8002` | `http://localhost:8002/docs` |
+| Quarantine Service | `8003` | `http://localhost:8003/docs` |
+| Admin Panel Service | `8004` | `http://localhost:8004/docs` |
+| RabbitMQ Management UI | `15672` | usuário/senha: `antifraud`/`antifraud` |
+
+### Enviando transações (Simulador)
+
+Em outro terminal, com o sistema já no ar:
+
+```bash
+cd simulator
+API_GATEWAY_URL=http://localhost:8080 python3 main.py --count 5
+```
+
+O Simulador lê a PaySim **sequencialmente** (preserva a correlação temporal
+entre contas — ver `simulator/README.md`) e envia cada transação ao API
+Gateway. `--count N` envia N transações e encerra; sem essa flag, roda
+continuamente. `--dry-run` imprime o evento sem enviar, útil para inspecionar
+o formato sem depender do resto do sistema estar de pé.
+
+### Interpretando os logs
+
+Uma transação percorre a cadeia inteira de microsserviços, e cada etapa deixa
+um rastro no terminal do `docker compose up`. Uma transação normal (score
+baixo) para por aqui:
+
+- api-gateway | POST /events/transactions -> 202
+- ingestion-service | POST /internal/transactions -> 202
+- risk-scoring-service | Evento ... pontuado: p_fraud=0.0367 (origin=..., destination=...)
+
+
+Uma transação de **alto risco** (score acima do threshold) continua a cadeia:
+
+- risk-scoring-service | Evento de risco alto publicado para conta C... com score 0.31...
+- quarantine-service | Quarentena aplicada para C...
+- admin-panel-service | Evento ContaEmQuarentena processado para a conta C...
+
+Essa diferença — a cadeia parar no Risk Scoring vs. continuar até o Admin
+Panel — é a melhor forma de demonstrar visualmente o critério de decisão do
+sistema (ver `HIGH_RISK_THRESHOLD` abaixo).
+
+### Forçando um caso de alto risco (útil para demonstração)
+
+Como o threshold padrão (`0.5`) é raramente atingido em transações
+aleatórias da PaySim, para garantir um caso de quarentena visível numa
+demonstração, sobrescreva o threshold antes de subir o
+`risk-scoring-service`:
+
+```yaml
+# docker-compose.yml, dentro de risk-scoring-service -> environment:
+HIGH_RISK_THRESHOLD: "0"
+```
+
+Com isso, **qualquer** transação dispara o fluxo completo até o Admin Panel.
+Reverta antes de qualquer commit — um threshold de `0` não é um valor de
+produção válido, ele marcaria toda transação como suspeita.
+
+### Inspecionando o estado manualmente
+
+```bash
+# Casos em quarentena, via API (mesmo caminho que o Administrador usaria)
+curl http://localhost:8080/admin/cases
+
+# Risk score incremental de uma conta específica
+curl http://localhost:8002/accounts/<ACCOUNT_ID>
+
+# Direto no banco de um serviço (troque o nome do serviço/banco/tabela)
+docker compose exec ingestion-db psql -U ingestion -d ingestion_db -c "SELECT * FROM events;"
+docker compose exec risk-scoring-db psql -U risk_scoring -d risk_scoring_db -c "SELECT * FROM account_stats;"
+```
+
+No RabbitMQ Management UI (`http://localhost:15672`), a aba **Queues** mostra
+as filas (`transacoes.registradas`, `quarantine.score-alto-risco`,
+`quarantine.comando-liberacao`, entre outras) e permite inspecionar mensagens
+manualmente em **Get messages**.
+
+### Encerrando
+
+```bash
+docker compose down
+```
+
+## Testes Automatizados
+
+O projeto usa duas ferramentas complementares, com propósitos diferentes:
+
+- **`pytest`** roda os **testes automatizados** — verifica se o
+  **comportamento** do código está correto (ex.: "um evento válido é
+  persistido e publicado", "um evento duplicado não é processado duas
+  vezes", "uma transação de alto risco aciona a quarentena"). Testa lógica,
+  não estilo.
+- **`ruff`** é um **linter** — verifica a **qualidade/consistência do
+  código** (imports não utilizados, linhas longas demais, formatação,
+  convenções modernas do Python). Não sabe se o código faz a coisa certa,
+  só se está bem escrito.
+
+Ambos rodam a partir da raiz do repositório, e cobrem os 5 microsserviços de
+uma vez (cada um mantém sua própria suíte, agregada em `tests/`):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+
+pytest -q          # roda todos os testes
+ruff check .        # verifica o estilo de todo o repositório
+```
+
+Os testes usam implementações **em memória** no lugar de PostgreSQL/RabbitMQ
+reais (ex.: `InMemoryEventStore`, `InMemoryEventPublisher`) — por isso rodam
+em menos de 2 segundos, sem precisar do Docker Compose no ar. Isso também
+permite testar cenários difíceis de provocar manualmente contra
+infraestrutura real, como "o que acontece se a publicação no RabbitMQ
+falhar depois do evento já ter sido persistido" (ver
+`tests/test_ingestion_service.py`).
+
+`tests/test_feature_parity.py` merece nota à parte: compara a
+reimplementação das features do Risk Scoring Service (calculada uma
+transação por vez, em produção) com o pipeline de treino do modelo (que
+processa o CSV inteiro em lote) — garantindo que os dois caminhos produzem
+exatamente o mesmo resultado, e pegando automaticamente qualquer divergência
+futura entre eles.
